@@ -1,0 +1,55 @@
+# Values for the argo/argo-cd chart. Applied two ways, both reading this
+# same file - never diverge by hand-editing one without the other:
+#   1. e4x-platform-bootstrap's one-time `helm template` bootstrap step.
+#   2. The self-managing `argo-cd` Application's Helm source (via a second,
+#      ref-only git source - Argo CD's documented pattern for loading Helm
+#      value files from an external git repo).
+#
+# `configs.cm.url` is deliberately NOT set here. It is the one per-cluster
+# value (the FQDN Argo CD is reached at), injected by e4x-platform-bootstrap
+# as a `valuesObject` merge on top of this file, from its `argocd_fqdn`
+# variable.
+
+# OIDC (Keycloak) replaces the bundled Dex entirely - disable the unused
+# dex-server deployment rather than leave it running idle.
+dex:
+  enabled: false
+
+configs:
+  cm:
+    # Lets repo-server render components that use the helmCharts: field in
+    # their own kustomization.yaml - without this, every such component
+    # fails to sync with "must specify --enable-helm".
+    "kustomize.buildOptions": --enable-helm
+
+    # OIDC configuration (alternative to Dex).
+    "oidc.config": |
+      name: Keycloak
+      issuer: $argocd-oidc-secret:ISSUER_URL
+      clientID: $argocd-oidc-secret:CLIENT_ID
+      clientSecret: $argocd-oidc-secret:CLIENT_SECRET
+      cliClientID: $argocd-oidc-secret:CLI_CLIENT_ID
+      # The MCP server signs users in through its own public PKCE client
+      # (argocd-mcp), separate from argocd-cli, so tokens come back with a
+      # different aud. Argo CD only accepts tokens whose audience is the web
+      # client ID by default - list every client ID issuing tokens it must
+      # accept here.
+      allowedAudiences:
+        - $argocd-oidc-secret:CLIENT_ID
+        - $argocd-oidc-secret:CLI_CLIENT_ID
+        - $argocd-oidc-secret:MCP_CLIENT_ID
+      requestedScopes:
+        - openid
+        - profile
+        - email
+      logoutURL: https://auth.cloudpoet.in/realms/cloudpoet/protocol/openid-connect/logout
+
+  rbac:
+    "policy.default": "role:readonly"
+    # groups comes from the Keycloak client's group-membership protocol
+    # mapper (added to the ID token regardless of requested scopes).
+    scopes: "[groups, email]"
+    "policy.csv": |
+      g, bhushan.rane@cloudpoet.in, role:admin
+      g, admins, role:admin
+      g, ipausers, role:readonly
